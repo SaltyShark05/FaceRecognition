@@ -36,6 +36,7 @@ for fx_scale in range(1, fx_scale_max + 1):
         }
         features.append(feature)
 
+all_sample_haar_features = []
 for step, (sample_transform, sample_label) in enumerate(DP.Face_dataloader):
     # 将数据拆分，降维成二维Tensor，合并成列表
     sample_divideds = torch.chunk(sample_transform, chunks=10, dim=0)
@@ -80,8 +81,9 @@ for step, (sample_transform, sample_label) in enumerate(DP.Face_dataloader):
                     area_right = calc_rectangle_value(sample_integral_image, current_pos_x + size_w, current_pos_y, size_w, size_h)
                     haar_feature_value = area_left * features[i]['weights'][0] + area_right * features[i]['weights'][1]
                     haar_features.append(haar_feature_value)
-            print(i)
-        sample_haar_features_tensor = torch.tensor(haar_features)
-        print(sample_haar_features_tensor.shape)
-
-    # print("step:{}, sample_transform:{}, sample_label:{}".format(step, sample_transform, sample_label))
+        haar_features_tensor = torch.tensor(haar_features)
+        sample_haar_features.append(haar_features_tensor)
+    sample_haar_features_tensor = torch.tensor(sample_haar_features)
+    all_sample_haar_features.append(sample_haar_features_tensor)
+    print("step:{}".format(step))
+all_sample_haar_features_tensor = torch.tensor(all_sample_haar_features)
