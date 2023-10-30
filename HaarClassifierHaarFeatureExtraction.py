@@ -81,7 +81,6 @@ for step, (sample_transform, sample_label) in enumerate(DP.Face_dataloader):
                     area_right = calc_rectangle_value(sample_integral_image, current_pos_x + size_w, current_pos_y, size_w, size_h)
                     haar_feature_value = area_left * features[i]['weights'][0] + area_right * features[i]['weights'][1]
                     haar_features.append(haar_feature_value)
-            print(i)
         haar_features_tensor = torch.tensor(haar_features)
         sample_haar_features.append(haar_features_tensor)
     sample_haar_features_tensor = torch.tensor(sample_haar_features)
