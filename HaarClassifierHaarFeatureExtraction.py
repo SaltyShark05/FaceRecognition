@@ -27,7 +27,7 @@ for step, (sample_transform, sample_label) in enumerate(DP.Face_dataloader):
 
     # 计算haar特征，获得haar特征向量
     # 计算haar模板的所有子模板
-    features = [haar_1_2_template]
+    features = [haar_2_1_template]
     # 遍历特征和位置
     for i in range(len(features)):
         for x in range(96):
