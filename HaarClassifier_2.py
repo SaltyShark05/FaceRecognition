@@ -7,7 +7,7 @@ import numpy as np
 
 
 # 正样本加载，返回文件的路径，以list存储
-positive_sample_path = glob.glob(r'E:\VScode\Python\FaceRecognition\ClassifierTrainingData\Positive\*.bmp')
+positive_sample_path = glob.glob(r'E:\VScode\Python\FaceRecognition\ClassifierTrainingData\Positive\*.jpg')
 
 # 负样本加载，返回文件的路径，以list存储
 negative_sample_path = glob.glob(r'E:\VScode\Python\FaceRecognition\ClassifierTrainingData\Negative\*.jpg')
