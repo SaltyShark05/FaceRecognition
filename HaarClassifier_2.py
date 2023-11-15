@@ -7,13 +7,14 @@ import numpy as np
 
 
 # 正样本加载，返回文件的路径，以list存储
-positive_sample_path = glob.glob(r'E:\VScode\Python\FaceRecognition\ClassifierTrainingData\Positive\*.bmp')
+positive_sample_path = glob.glob(r'E:\VScode\Python\FaceRecognition\ClassifierTrainingData\Positive\*.jpg')
 
 # 负样本加载，返回文件的路径，以list存储
 negative_sample_path = glob.glob(r'E:\VScode\Python\FaceRecognition\ClassifierTrainingData\Negative\*.jpg')
 
 # 创建样本路径，正负样本合并
 all_sample_path = positive_sample_path + negative_sample_path
+sample_num = int(len(all_sample_path))
 
 # 创建样本标签
 all_sample_label = []
@@ -33,152 +34,107 @@ all_sample_transform = transforms.Compose([
 
 
 def generate_haar_feature(image, size, haar_type):
+    # 根据积分图计算矩形值
+    def calc_edge_1_value(sample_integral_image, features, size, position, weights):
+        feature_type_x, feature_type_y = features['type']
+        feature_size = size
+        feature_weight_l, feature_weight_r = weights
+        x1, y1 = position
+        x2, y2 = x1 + feature_size//feature_type_x, y1 + feature_size//feature_type_y
+        x3, y3 = x2, y1
+        x4, y4 = x3 + feature_size//feature_type_x, y2
+        area_l = sample_integral_image[x1, y1] + sample_integral_image[x2, y2] - sample_integral_image[x2, y1] - sample_integral_image[x1, y2]
+        area_r = sample_integral_image[x3, y3] + sample_integral_image[x4, y4] - sample_integral_image[x4, y3] - sample_integral_image[x3, y4]
+        value = area_l * feature_weight_l + area_r * feature_weight_r
+        value = value / (size * size)
+        return value
+
+    # 根据积分图计算矩形值
+    def calc_line_1_value(sample_integral_image, features, size, position, weights):
+        feature_type_x, feature_type_y = features['type']
+        feature_size = size
+        feature_weight_l, feature_weight_mid, feature_weight_r = weights
+        x1, y1 = position
+        x2, y2 = x1 + feature_size//feature_type_x, y1 + feature_size//feature_type_y
+        x3, y3 = x2, y1
+        x4, y4 = x3 + feature_size//feature_type_x, y2
+        x5, y5 = x4, y1
+        x6, y6 = x5 + feature_size//feature_type_x, y2
+        area_l = sample_integral_image[x1, y1] + sample_integral_image[x2, y2] - sample_integral_image[x2, y1] - sample_integral_image[x1, y2]
+        area_mid = sample_integral_image[x3, y3] + sample_integral_image[x4, y4] - sample_integral_image[x4, y3] - sample_integral_image[x3, y4]
+        area_r = sample_integral_image[x5, y5] + sample_integral_image[x6, y6] - sample_integral_image[x6, y5] - sample_integral_image[x5, y6]
+        value = area_l * feature_weight_l + area_mid * feature_weight_mid + area_r * feature_weight_r
+        value = value / (size * size)
+        return value
+
+    # 根据积分图计算矩形值
+    def calc_center_1_value(sample_integral_image, features, size, position, weights):
+        feature_type_x, feature_type_y = features['type']
+        feature_size = size
+        feature_weight_ul, feature_weight_ur, feature_weight_dl, feature_weight_dr = weights
+        x1, y1 = position
+        x2, y2 = x1 + feature_size//feature_type_x, y1 + feature_size//feature_type_y
+        x3, y3 = x2, y1
+        x4, y4 = x3 + feature_size//feature_type_x, y2
+        x5, y5 = x1, y2
+        x6, y6 = x2, y2 + feature_size//feature_type_y
+        x7, y7 = x2, y2
+        x8, y8 = x4, y6
+        area_ul = sample_integral_image[x1, y1] + sample_integral_image[x2, y2] - sample_integral_image[x2, y1] - sample_integral_image[x1, y2]
+        area_ur = sample_integral_image[x3, y3] + sample_integral_image[x4, y4] - sample_integral_image[x4, y3] - sample_integral_image[x3, y4]
+        area_dl = sample_integral_image[x5, y5] + sample_integral_image[x6, y6] - sample_integral_image[x6, y5] - sample_integral_image[x5, y6]
+        area_dr = sample_integral_image[x7, y7] + sample_integral_image[x8, y8] - sample_integral_image[x8, y7] - sample_integral_image[x7, y8]
+        value = area_ul * feature_weight_ul + area_ur * feature_weight_ur + area_dl * feature_weight_dl + area_dr * feature_weight_dr
+        value = value / (size * size)
+        return value
+    # 将数据降维成二维Tensor
+    image = image.squeeze(dim=0)
+    # 计算积分图
+    sample_integral_image = torch.cumsum(image, dim=0).cumsum(dim=1)
+    # 在进行积分图计算时需要加边进行计算
+    pad_left = torch.zeros(48, 1)  # 左加边
+    sample_integral_image = torch.cat([pad_left, sample_integral_image], dim=1)
+    pad_top = torch.zeros(1, 49)  # 上加边
+    sample_integral_image = torch.cat([pad_top, sample_integral_image], dim=0)
+    # 生成haar模板
     if haar_type == 'edge_1':
-        # 生成边缘模板
+        # 边缘模板
         haar_template = {
             'type': [2, 1],
             'weights': [1, -1],
         }
-
-        # 根据积分图计算矩形值
-        def calc_edge_1_value(sample_integral_image, features, size, position, weights):
-            feature_type_x, feature_type_y = features['type']
-            feature_size = size
-            feature_weight_l, feature_weight_r = weights
-            x1, y1 = position
-            x2, y2 = x1 + feature_size//feature_type_x, y1 + feature_size//feature_type_y
-            x3, y3 = x2, y1
-            x4, y4 = x3 + feature_size//feature_type_x, y2
-            area_l = sample_integral_image[x1, y1] + sample_integral_image[x2, y2] - sample_integral_image[x2, y1] - sample_integral_image[x1, y2]
-            area_r = sample_integral_image[x3, y3] + sample_integral_image[x4, y4] - sample_integral_image[x4, y3] - sample_integral_image[x3, y4]
-            value = area_l * feature_weight_l + area_r * feature_weight_r
-            value = value / (size * size)
-            return value
-
-        # 将数据降维成二维Tensor
-        image = image.squeeze(dim=0)
-        # 计算积分图
-        sample_integral_image = torch.cumsum(image, dim=0).cumsum(dim=1)
-        # 在进行积分图计算时需要加边进行计算
-        pad_left = torch.zeros(48, 1)  # 左加边
-        sample_integral_image = torch.cat([pad_left, sample_integral_image], dim=1)
-        pad_top = torch.zeros(1, 49)  # 上加边
-        sample_integral_image = torch.cat([pad_top, sample_integral_image], dim=0)
-        # 获取该haar模板的样式
-        weights = haar_template['weights']
-        # 提前计算出所有位置
-        positions = []
-        max_steps = 48 - size + 1
-        for x in range(0, max_steps, 4):
-            for y in range(0, max_steps, 4):
-                positions.append([x, y])
-        haar_features = []
-        for pos in range(len(positions)):
-            haar_feature = calc_edge_1_value(sample_integral_image, haar_template, size, positions[pos], weights)
-            haar_features.append(haar_feature)
-    # elif haar_type == 'edge_2':
-    #     # 生成线性模板
-    #     haar_template = {
-    #         'type': [1, 2],
-    #         'weights': [1, -1],
-    #     }
     elif haar_type == 'line_1':
-        # 生成线性模板
+        # 线性模板
         haar_template = {
             'type': [3, 1],
             'weights': [-0.5, 1, -0.5],
         }
-
-        # 根据积分图计算矩形值
-        def calc_line_1_value(sample_integral_image, features, size, position, weights):
-            feature_type_x, feature_type_y = features['type']
-            feature_size = size
-            feature_weight_l, feature_weight_mid, feature_weight_r = weights
-            x1, y1 = position
-            x2, y2 = x1 + feature_size//feature_type_x, y1 + feature_size//feature_type_y
-            x3, y3 = x2, y1
-            x4, y4 = x3 + feature_size//feature_type_x, y2
-            x5, y5 = x4, y1
-            x6, y6 = x5 + feature_size//feature_type_x, y2
-            area_l = sample_integral_image[x1, y1] + sample_integral_image[x2, y2] - sample_integral_image[x2, y1] - sample_integral_image[x1, y2]
-            area_mid = sample_integral_image[x3, y3] + sample_integral_image[x4, y4] - sample_integral_image[x4, y3] - sample_integral_image[x3, y4]
-            area_r = sample_integral_image[x5, y5] + sample_integral_image[x6, y6] - sample_integral_image[x6, y5] - sample_integral_image[x5, y6]
-            value = area_l * feature_weight_l + area_mid * feature_weight_mid + area_r * feature_weight_r
-            value = value / (size * size)
-            return value
-
-        # 将数据降维成二维Tensor
-        image = image.squeeze(dim=0)
-        # 计算积分图
-        sample_integral_image = torch.cumsum(image, dim=0).cumsum(dim=1)
-        # 在进行积分图计算时需要加边进行计算
-        pad_left = torch.zeros(48, 1)  # 左加边
-        sample_integral_image = torch.cat([pad_left, sample_integral_image], dim=1)
-        pad_top = torch.zeros(1, 49)  # 上加边
-        sample_integral_image = torch.cat([pad_top, sample_integral_image], dim=0)
-        # 获取该haar模板的样式
-        weights = haar_template['weights']
-        # 提前计算出所有位置
-        positions = []
-        max_steps = 48 - size + 1
-        for x in range(0, max_steps, 4):
-            for y in range(0, max_steps, 4):
-                positions.append([x, y])
-        haar_features = []
-        for pos in range(len(positions)):
-            haar_feature = calc_line_1_value(sample_integral_image, haar_template, size, positions[pos], weights)
-            haar_features.append(haar_feature)
-    # elif haar_type == 'line_2':
-    #     # 生成线性模板
-    #     haar_template = {
-    #         'type': [1, 3],
-    #         'weights': [1, -1],
-    #     }
     elif haar_type == 'center_1':
-        # 生成中心模板
+        # 中心模板
         haar_template = {
             'type': [2, 2],
             'weights': [0.5, -0.5, -0.5, 0.5],
         }
-
-        # 根据积分图计算矩形值
-        def calc_center_1_value(sample_integral_image, features, size, position, weights):
-            feature_type_x, feature_type_y = features['type']
-            feature_size = size
-            feature_weight_ul, feature_weight_ur, feature_weight_dl, feature_weight_dr = weights
-            x1, y1 = position
-            x2, y2 = x1 + feature_size//feature_type_x, y1 + feature_size//feature_type_y
-            x3, y3 = x2, y1
-            x4, y4 = x3 + feature_size//feature_type_x, y2
-            x5, y5 = x1, y2
-            x6, y6 = x2, y2 + feature_size//feature_type_y
-            x7, y7 = x2, y2
-            x8, y8 = x4, y6
-            area_ul = sample_integral_image[x1, y1] + sample_integral_image[x2, y2] - sample_integral_image[x2, y1] - sample_integral_image[x1, y2]
-            area_ur = sample_integral_image[x3, y3] + sample_integral_image[x4, y4] - sample_integral_image[x4, y3] - sample_integral_image[x3, y4]
-            area_dl = sample_integral_image[x5, y5] + sample_integral_image[x6, y6] - sample_integral_image[x6, y5] - sample_integral_image[x5, y6]
-            area_dr = sample_integral_image[x7, y7] + sample_integral_image[x8, y8] - sample_integral_image[x8, y7] - sample_integral_image[x7, y8]
-            value = area_ul * feature_weight_ul + area_ur * feature_weight_ur + area_dl * feature_weight_dl + area_dr * feature_weight_dr
-            value = value / (size * size)
-            return value
-
-        # 将数据降维成二维Tensor
-        image = image.squeeze(dim=0)
-        # 计算积分图
-        sample_integral_image = torch.cumsum(image, dim=0).cumsum(dim=1)
-        # 在进行积分图计算时需要加边进行计算
-        pad_left = torch.zeros(48, 1)  # 左加边
-        sample_integral_image = torch.cat([pad_left, sample_integral_image], dim=1)
-        pad_top = torch.zeros(1, 49)  # 上加边
-        sample_integral_image = torch.cat([pad_top, sample_integral_image], dim=0)
-        # 获取该haar模板的样式
-        weights = haar_template['weights']
-        # 提前计算出所有位置
-        positions = []
-        max_steps = 48 - size + 1
-        for x in range(0, max_steps, 4):
-            for y in range(0, max_steps, 4):
-                positions.append([x, y])
+    # 获取该haar模板的样式
+    weights = haar_template['weights']
+    # 提前计算出所有位置
+    positions = []
+    max_steps = 48 - size + 1
+    for x in range(0, max_steps, 4):
+        for y in range(0, max_steps, 4):
+            positions.append([x, y])
+    # 按照不同的模板计算不同的特征值
+    if haar_type == 'edge_1':
+        haar_features = []
+        for pos in range(len(positions)):
+            haar_feature = calc_edge_1_value(sample_integral_image, haar_template, size, positions[pos], weights)
+            haar_features.append(haar_feature)
+    elif haar_type == 'line_1':
+        haar_features = []
+        for pos in range(len(positions)):
+            haar_feature = calc_line_1_value(sample_integral_image, haar_template, size, positions[pos], weights)
+            haar_features.append(haar_feature)
+    elif haar_type == 'center_1':
         haar_features = []
         for pos in range(len(positions)):
             haar_feature = calc_center_1_value(sample_integral_image, haar_template, size, positions[pos], weights)
@@ -279,11 +235,19 @@ class AdaBoostClassifier(nn.Module):
 
 # 模型训练
 clf = AdaBoostClassifier()
+# GPU加速
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+clf.to(device)
 sample_features_example, sample_label_example = next(iter(train_dataloader))
 if not clf.n_features:
     clf.n_features = sample_features_example.shape[1]
 # 创建adaboost分类器所有包含的弱分类器
-estimators = [WeakClassifier(n_features=clf.n_features) for _ in range(clf.n_estimators)]
+estimators = []
+for _ in range(clf.n_estimators):
+    estimator = WeakClassifier(n_features=clf.n_features)
+    # GPU加速
+    estimator.to(device)
+    estimators.append(estimator)
 clf.estimators = nn.ModuleList(estimators)
 # 对弱分类器进行训练
 for i in range(clf.n_estimators):
@@ -292,6 +256,9 @@ for i in range(clf.n_estimators):
     criterion = nn.BCELoss()
     optimizer = torch.optim.SGD(estimator.parameters(), lr=0.01)
     for step, (sample_features, sample_label) in enumerate(train_dataloader):
+        # GPU加速
+        sample_features = sample_features.to(device)
+        sample_label = sample_label.to(device)
         optimizer.zero_grad()
         predictions = estimator(sample_features)
         sample_label = sample_label.float()
@@ -305,6 +272,9 @@ for i in range(clf.n_estimators):
 
 # 对adaboost中的alpha进行训练
 for step, (sample_features, sample_label) in enumerate(train_dataloader):
+    # GPU加速
+    sample_features = sample_features.to(device)
+    sample_label = sample_label.to(device)
     # 初始化学习率
     clf.learning_rate = 0.5
     n_samples, _ = sample_features.shape
@@ -327,11 +297,11 @@ state_dict = {
     'estimators': clf.estimators,
     'alphas': clf.alphas.detach()
 }
-torch.save(state_dict, r'FaceRecognition\ModelParameter\adaboost.pth')
+torch.save(state_dict, r'FaceRecognition\ModelParameter\adaboost_gpu.pth')
 
 # 加载预训练模型
 clf = AdaBoostClassifier()
-state_dict = torch.load(r'FaceRecognition\ModelParameter\adaboost.pth')
+state_dict = torch.load(r'FaceRecognition\ModelParameter\adaboost_gpu.pth')
 clf.estimators = state_dict['estimators']
 clf.alphas = nn.Parameter(state_dict['alphas'])
 
@@ -341,7 +311,11 @@ clf.eval()
 # 进行预测
 for step, (sample_features, sample_label) in enumerate(test_dataloader):
     with torch.no_grad():  # 关闭梯度计算
-        y_pred = clf(sample_features)  # 直接传入测试数据
+        # GPU加速
+        sample_features = sample_features.to(device)
+        sample_label = sample_label.to(device)
+        # 直接传入测试数据
+        y_pred = clf(sample_features)
         # 计算指标
         acc = (y_pred == sample_label).float().mean()
-        print('step:{}/{}, Accuracy:{}'.format(step + 1, (7000 - divided_line) // test_batch_size, acc))
+        print('step:{}/{}, Accuracy:{}'.format(step + 1, (sample_num - divided_line) // test_batch_size, acc))
