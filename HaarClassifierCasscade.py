@@ -22,7 +22,7 @@ for img in positive_sample_path:
     all_sample_label.append(1.)
 
 for img in negative_sample_path:
-    all_sample_label.append(0.)
+    all_sample_label.append(-1.)
 
 # 对数据进行转换处理
 all_sample_transform = transforms.Compose([
@@ -251,21 +251,21 @@ class WeakClassifier(nn.Module):
     def __init__(self, n_features):
         super(WeakClassifier, self).__init__()
         self.linear = nn.Linear(n_features, 1)
-        self.sigmoid = nn.Sigmoid()
+        self.tanh = nn.Tanh()
 
     def forward(self, x):
         x = self.linear(x)
-        x = self.sigmoid(x)
-        y_pred = torch.round(x).squeeze(-1)
+        x = self.tanh(x)
+        y_pred = torch.sign(x).squeeze(-1)
         return y_pred
 
     def fit(self, x, y, sample_weight):
         criterion = nn.BCELoss(reduction='none')
-        optimizer = torch.optim.SGD(self.parameters(), lr=0.005)
+        optimizer = torch.optim.SGD(self.parameters(), lr=0.01)
         for _ in range(100):
             y_pred = self(x)
             y = y.float()
-            loss = criterion(y_pred, y)
+            loss = criterion(torch.sigmoid(y_pred), torch.sigmoid(y))
             loss = (loss * sample_weight).mean()
 
             optimizer.zero_grad()
@@ -306,7 +306,7 @@ class CascadeAdaBoost:
     def predict(self, x):
         final_predictions = torch.zeros(len(x))
         for alpha, estimator in zip(self.alphas, self.estimators):
-            final_predictions += torch.tensor(alpha * estimator(x)).long()
+            final_predictions += alpha * estimator(x)
         final_predictions = torch.sign(final_predictions)
         return final_predictions
 
