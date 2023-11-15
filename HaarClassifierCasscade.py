@@ -230,7 +230,7 @@ class Mydataset(torch.utils.data.Dataset):
 index = np.random.permutation(len(all_sample_path))
 all_sample_path = np.array(all_sample_path)[index]
 all_sample_label = np.array(all_sample_label)[index]
-divided_line = int(len(all_sample_path)*0.8)
+divided_line = int(len(all_sample_path)*0.008)
 
 train_imgs = all_sample_path[:divided_line]
 train_labels = all_sample_label[:divided_line]
@@ -240,7 +240,7 @@ test_labels = all_sample_label[divided_line:]
 # 生成数据集与数据加载器
 train_dataset = Mydataset(train_imgs, train_labels, all_sample_transform)
 test_dataset = Mydataset(test_imgs, test_labels, all_sample_transform)
-train_batch_size = 40
+train_batch_size = 10
 train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True)
 test_batch_size = 200
 test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=test_batch_size, shuffle=True)
@@ -260,12 +260,12 @@ class WeakClassifier(nn.Module):
         return y_pred
 
     def fit(self, x, y, sample_weight):
-        criterion = nn.BCELoss(reduction='none')
+        criterion = nn.MSELoss(reduction='none')
         optimizer = torch.optim.SGD(self.parameters(), lr=0.01)
         for _ in range(100):
             y_pred = self(x)
             y = y.float()
-            loss = criterion(torch.sigmoid(y_pred), torch.sigmoid(y))
+            loss = criterion(y_pred, y)
             loss = (loss * sample_weight).mean()
 
             optimizer.zero_grad()

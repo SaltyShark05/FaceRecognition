@@ -259,22 +259,9 @@ class WeakClassifier(nn.Module):
         y_pred = torch.sign(y_pred).squeeze(-1)
         return y_pred
 
-    def fit(self, x, y, sample_weight):
-        criterion = nn.BCELoss(reduction='none')
-        optimizer = torch.optim.SGD(self.parameters(), lr=0.01)
-
-        y_pred = self(x)
-        y = y.float()
-        loss = criterion(torch.sigmoid(y_pred), torch.sigmoid(y))
-        loss = (loss * sample_weight).mean()
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
 
 class AdaBoostClassifier(nn.Module):
-    def __init__(self, n_estimators=100):
+    def __init__(self, n_estimators=10):
         super(AdaBoostClassifier, self).__init__()
         self.n_estimators = n_estimators
         self.n_features = None
@@ -289,41 +276,51 @@ class AdaBoostClassifier(nn.Module):
         y_pred = torch.sign(y_pred)
         return y_pred
 
-    def fit(self, x, y):
-        if not self.n_features:
-            self.n_features = x.shape[1]
-        if not self.estimators:
-            estimators = [WeakClassifier(n_features=self.n_features) for _ in range(self.n_estimators)]
-            self.estimators = nn.ModuleList(estimators)
-        # 初始化学习率
-        self.learning_rate = 0.5
-        n_samples, _ = x.shape
-        # 初始化样本权重
-        sample_weight = torch.full((n_samples,), (1 / n_samples))
-        for i in range(self.n_estimators):
-            # 训练单个弱分类器
-            estimator = self.estimators[i]
-            estimator.fit(x, y, sample_weight)
-            self.estimators[i] = estimator
-            # 更新样本权重
-            y_pred = self.estimators[i](x)
-            sample_weight[y == y_pred] *= np.exp(-self.learning_rate)
-            sample_weight /= sample_weight.sum()
-            # 计算alpha
-            err = (sample_weight * (y != y_pred)).sum()
-            alpha = 0.5 * np.log((1 - err) / err)
-            self.alphas.requires_grad_(False)
-            self.alphas[i] = alpha
-
 
 # 模型训练
 clf = AdaBoostClassifier()
+sample_features_example, sample_label_example = next(iter(train_dataloader))
+if not clf.n_features:
+    clf.n_features = sample_features_example.shape[1]
+# 创建adaboost分类器所有包含的弱分类器
+estimators = [WeakClassifier(n_features=clf.n_features) for _ in range(clf.n_estimators)]
+clf.estimators = nn.ModuleList(estimators)
+# 对弱分类器进行训练
+for i in range(clf.n_estimators):
+    # 训练单个弱分类器
+    estimator = clf.estimators[i]
+    criterion = nn.BCELoss()
+    optimizer = torch.optim.SGD(estimator.parameters(), lr=0.01)
+    for step, (sample_features, sample_label) in enumerate(train_dataloader):
+        optimizer.zero_grad()
+        predictions = estimator(sample_features)
+        sample_label = sample_label.float()
+        loss = criterion(torch.sigmoid(predictions), torch.sigmoid(sample_label))
+        loss.backward()
+        optimizer.step()
+        print('step:{}/{}'.format(step + 1, divided_line // train_batch_size))
+    # 完成单个弱分类器的训练
+    print("estimator[{}]/[{}] has finished training".format(i + 1, clf.n_estimators))
+    clf.estimators[i] = estimator
+
+# 对adaboost中的alpha进行训练
 for step, (sample_features, sample_label) in enumerate(train_dataloader):
-    clf.fit(sample_features, sample_label)
-    with torch.no_grad():  # 关闭梯度计算
-        y_pred = clf(sample_features)
-        acc = (y_pred == sample_label).float().mean()
-        print("step:{}/{}, Accuracy:{}".format(step + 1, divided_line // train_batch_size, acc))
+    # 初始化学习率
+    clf.learning_rate = 0.5
+    n_samples, _ = sample_features.shape
+    # 初始化样本权重
+    sample_weight = torch.full((n_samples,), (1 / n_samples))
+    for i in range(clf.n_estimators):
+        # 更新样本权重
+        predictions = clf.estimators[i](sample_features)
+        sample_weight[sample_label == predictions] *= np.exp(-clf.learning_rate)
+        sample_weight /= sample_weight.sum()
+        # 计算alpha
+        err = (sample_weight * (sample_label != predictions)).sum()
+        alpha = 0.5 * np.log((1 - err) / err)
+        clf.alphas.requires_grad_(False)
+        clf.alphas[i] = alpha
+    print('step:{}/{}'.format(step + 1, divided_line // train_batch_size))
 
 # 训练好模型后保存模型
 state_dict = {
@@ -346,6 +343,5 @@ for step, (sample_features, sample_label) in enumerate(test_dataloader):
     with torch.no_grad():  # 关闭梯度计算
         y_pred = clf(sample_features)  # 直接传入测试数据
         # 计算指标
-        print("y_pred:{}, sample_label:{}".format(y_pred, sample_label))
         acc = (y_pred == sample_label).float().mean()
         print('step:{}/{}, Accuracy:{}'.format(step + 1, (7000 - divided_line) // test_batch_size, acc))
