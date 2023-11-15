@@ -22,7 +22,7 @@ for img in positive_sample_path:
     all_sample_label.append(1.)
 
 for img in negative_sample_path:
-    all_sample_label.append(0.)
+    all_sample_label.append(-1.)
 
 # 对数据进行转换处理
 all_sample_transform = transforms.Compose([
@@ -251,21 +251,21 @@ class WeakClassifier(nn.Module):
     def __init__(self, n_features):
         super(WeakClassifier, self).__init__()
         self.linear = nn.Linear(n_features, 1)
-        self.sigmoid = nn.Sigmoid()
+        self.tanh = nn.Tanh()
 
     def forward(self, x):
         y_pred = self.linear(x)
-        y_pred = self.sigmoid(y_pred)
-        y_pred = torch.round(y_pred).squeeze(-1)
+        y_pred = self.tanh(y_pred)
+        y_pred = torch.sign(y_pred).squeeze(-1)
         return y_pred
 
     def fit(self, x, y, sample_weight):
         criterion = nn.BCELoss(reduction='none')
-        optimizer = torch.optim.SGD(self.parameters(), lr=0.005)
+        optimizer = torch.optim.SGD(self.parameters(), lr=0.01)
         for _ in range(100):
             y_pred = self(x)
             y = y.float()
-            loss = criterion(y_pred, y)
+            loss = criterion(torch.sigmoid(y_pred), torch.sigmoid(y))
             loss = (loss * sample_weight).mean()
 
             optimizer.zero_grad()
@@ -283,9 +283,9 @@ class AdaBoostClassifier(nn.Module):
         self.estimators = None
 
     def forward(self, x):
-        y_pred = torch.zeros(len(x)).long()
+        y_pred = torch.zeros(len(x))
         for alpha, estimator in zip(self.alphas, self.estimators):
-            y_pred += torch.tensor(alpha * estimator(x)).long()
+            y_pred += alpha * estimator(x)
         y_pred = torch.sign(y_pred)
         return y_pred
 
@@ -296,7 +296,7 @@ class AdaBoostClassifier(nn.Module):
             estimators = [WeakClassifier(n_features=self.n_features) for _ in range(self.n_estimators)]
             self.estimators = nn.ModuleList(estimators)
         # 初始化学习率
-        self.learning_rate = 0.05
+        self.learning_rate = 0.1
         n_samples, _ = x.shape
         # 初始化样本权重
         sample_weight = torch.full((n_samples,), (1 / n_samples))
