@@ -92,10 +92,7 @@ def generate_haar_feature(image, size, haar_type):
     # 计算积分图
     sample_integral_image = torch.cumsum(image, dim=0).cumsum(dim=1)
     # 在进行积分图计算时需要加边进行计算
-    pad_left = torch.zeros(48, 1)  # 左加边
-    sample_integral_image = torch.cat([pad_left, sample_integral_image], dim=1)
-    pad_top = torch.zeros(1, 49)  # 上加边
-    sample_integral_image = torch.cat([pad_top, sample_integral_image], dim=0)
+    sample_integral_image = torch.nn.functional.pad(sample_integral_image, (1, 0, 1, 0))
     # 生成haar模板
     if haar_type == 'edge_1':
         # 边缘模板
@@ -215,9 +212,22 @@ class WeakClassifier(nn.Module):
         y_pred = torch.sign(y_pred).squeeze(-1)
         return y_pred
 
+    def fit(self, x, y, sample_weight):
+        criterion = nn.BCELoss(reduction='none')
+        optimizer = torch.optim.SGD(self.parameters(), lr=0.01)
+
+        y_pred = self(x)
+        y = y.float()
+        loss = criterion(torch.sigmoid(y_pred), torch.sigmoid(y))
+        loss = (loss * sample_weight).mean()
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
 
 class AdaBoostClassifier(nn.Module):
-    def __init__(self, n_estimators=10):
+    def __init__(self, n_estimators=100):
         super(AdaBoostClassifier, self).__init__()
         self.n_estimators = n_estimators
         self.n_features = None
@@ -232,76 +242,52 @@ class AdaBoostClassifier(nn.Module):
         y_pred = torch.sign(y_pred)
         return y_pred
 
+    def fit(self, x, y):
+        if not self.n_features:
+            self.n_features = x.shape[1]
+        if not self.estimators:
+            estimators = [WeakClassifier(n_features=self.n_features) for _ in range(self.n_estimators)]
+            self.estimators = nn.ModuleList(estimators)
+        # 初始化学习率
+        self.learning_rate = 0.5
+        n_samples, _ = x.shape
+        # 初始化样本权重
+        sample_weight = torch.full((n_samples,), (1 / n_samples))
+        for i in range(self.n_estimators):
+            # 训练单个弱分类器
+            estimator = self.estimators[i]
+            estimator.fit(x, y, sample_weight)
+            self.estimators[i] = estimator
+            # 更新样本权重
+            y_pred = self.estimators[i](x)
+            sample_weight[y == y_pred] *= np.exp(-self.learning_rate)
+            sample_weight /= sample_weight.sum()
+            # 计算alpha
+            err = (sample_weight * (y != y_pred)).sum()
+            alpha = 0.5 * np.log((1 - err) / err)
+            self.alphas.requires_grad_(False)
+            self.alphas[i] = alpha
 
-# 模型训练
-clf = AdaBoostClassifier()
-# GPU加速
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-clf.to(device)
-sample_features_example, sample_label_example = next(iter(train_dataloader))
-if not clf.n_features:
-    clf.n_features = sample_features_example.shape[1]
-# 创建adaboost分类器所有包含的弱分类器
-estimators = []
-for _ in range(clf.n_estimators):
-    estimator = WeakClassifier(n_features=clf.n_features)
-    # GPU加速
-    estimator.to(device)
-    estimators.append(estimator)
-clf.estimators = nn.ModuleList(estimators)
-# 对弱分类器进行训练
-for i in range(clf.n_estimators):
-    # 训练单个弱分类器
-    estimator = clf.estimators[i]
-    criterion = nn.BCELoss()
-    optimizer = torch.optim.SGD(estimator.parameters(), lr=0.01)
-    for step, (sample_features, sample_label) in enumerate(train_dataloader):
-        # GPU加速
-        sample_features = sample_features.to(device)
-        sample_label = sample_label.to(device)
-        optimizer.zero_grad()
-        predictions = estimator(sample_features)
-        sample_label = sample_label.float()
-        loss = criterion(torch.sigmoid(predictions), torch.sigmoid(sample_label))
-        loss.backward()
-        optimizer.step()
-        print('step:{}/{}'.format(step + 1, divided_line // train_batch_size))
-    # 完成单个弱分类器的训练
-    print("estimator[{}]/[{}] has finished training".format(i + 1, clf.n_estimators))
-    clf.estimators[i] = estimator
 
-# 对adaboost中的alpha进行训练
-for step, (sample_features, sample_label) in enumerate(train_dataloader):
-    # GPU加速
-    sample_features = sample_features.to(device)
-    sample_label = sample_label.to(device)
-    # 初始化学习率
-    clf.learning_rate = 0.5
-    n_samples, _ = sample_features.shape
-    # 初始化样本权重
-    sample_weight = torch.full((n_samples,), (1 / n_samples))
-    for i in range(clf.n_estimators):
-        # 更新样本权重
-        predictions = clf.estimators[i](sample_features)
-        sample_weight[sample_label == predictions] *= np.exp(-clf.learning_rate)
-        sample_weight /= sample_weight.sum()
-        # 计算alpha
-        err = (sample_weight * (sample_label != predictions)).sum()
-        alpha = 0.5 * np.log((1 - err) / err)
-        clf.alphas.requires_grad_(False)
-        clf.alphas[i] = alpha
-    print('step:{}/{}'.format(step + 1, divided_line // train_batch_size))
+# # 模型训练
+# clf = AdaBoostClassifier()
+# for step, (sample_features, sample_label) in enumerate(train_dataloader):
+#     clf.fit(sample_features, sample_label)
+#     with torch.no_grad():  # 关闭梯度计算
+#         y_pred = clf(sample_features)
+#         acc = (y_pred == sample_label).float().mean()
+#         print("step:{}/{}, Accuracy:{}".format(step + 1, divided_line // train_batch_size, acc))
 
-# 训练好模型后保存模型
-state_dict = {
-    'estimators': clf.estimators,
-    'alphas': clf.alphas.detach()
-}
-torch.save(state_dict, r'FaceRecognition\ModelParameter\adaboost_gpu.pth')
+# # 训练好模型后保存模型
+# state_dict = {
+#     'estimators': clf.estimators,
+#     'alphas': clf.alphas.detach()
+# }
+# torch.save(state_dict, r'FaceRecognition\ModelParameter\adaboost.pth')
 
 # 加载预训练模型
 clf = AdaBoostClassifier()
-state_dict = torch.load(r'FaceRecognition\ModelParameter\adaboost_gpu.pth')
+state_dict = torch.load(r'FaceRecognition\ModelParameter\adaboost.pth')
 clf.estimators = state_dict['estimators']
 clf.alphas = nn.Parameter(state_dict['alphas'])
 
@@ -311,11 +297,8 @@ clf.eval()
 # 进行预测
 for step, (sample_features, sample_label) in enumerate(test_dataloader):
     with torch.no_grad():  # 关闭梯度计算
-        # GPU加速
-        sample_features = sample_features.to(device)
-        sample_label = sample_label.to(device)
-        # 直接传入测试数据
-        y_pred = clf(sample_features)
+        y_pred = clf(sample_features)  # 直接传入测试数据
         # 计算指标
+        print("y_pred:{}, sample_label:{}".format(y_pred, sample_label))
         acc = (y_pred == sample_label).float().mean()
         print('step:{}/{}, Accuracy:{}'.format(step + 1, (sample_num - divided_line) // test_batch_size, acc))
