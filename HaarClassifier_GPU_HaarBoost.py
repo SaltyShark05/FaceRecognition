@@ -142,31 +142,42 @@ class Mydataset(torch.utils.data.Dataset):
 index = np.random.permutation(len(all_sample_path))
 all_sample_path = np.array(all_sample_path)[index]
 all_sample_label = np.array(all_sample_label)[index]
-divided_line = int(len(all_sample_path)*0.8)
 
-train_imgs = all_sample_path[:divided_line]
-train_labels = all_sample_label[:divided_line]
-test_imgs = all_sample_path[divided_line:]
-test_labels = all_sample_label[divided_line:]
+divided_line_1 = int(len(all_sample_path)*0.2)
+divided_line_2 = int(len(all_sample_path)*0.8)
+
+weak_train_imgs = all_sample_path[:divided_line_1]
+weak_train_labels = all_sample_label[:divided_line_1]
+ada_train_imgs = all_sample_path[divided_line_1:divided_line_2]
+ada_train_labels = all_sample_label[divided_line_1:divided_line_2]
+test_imgs = all_sample_path[divided_line_2:]
+test_labels = all_sample_label[divided_line_2:]
 
 # 生成数据集与数据加载器
-train_dataset = Mydataset(train_imgs, train_labels, all_sample_transform)
+weak_train_dataset = Mydataset(weak_train_imgs, weak_train_labels, all_sample_transform)
+ada_train_dataset = Mydataset(ada_train_imgs, ada_train_labels, all_sample_transform)
 test_dataset = Mydataset(test_imgs, test_labels, all_sample_transform)
-train_batch_size = 200
-train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True)
-test_batch_size = 200
+weak_train_batch_size = 200
+weak_train_dataloader = torch.utils.data.DataLoader(weak_train_dataset, batch_size=weak_train_batch_size, shuffle=True)
+ada_train_batch_size = 200
+ada_train_dataloader = torch.utils.data.DataLoader(ada_train_dataset, batch_size=ada_train_batch_size, shuffle=True)
+test_batch_size = 800
 test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=test_batch_size, shuffle=True)
 
 
 # 模型定义
 class WeakClassifier(nn.Module):
-    def __init__(self, n_features):
+    def __init__(self, n_features, n_hidden=32, n_output=1):
         super(WeakClassifier, self).__init__()
-        self.linear = nn.Linear(n_features, 1)
+        self.linear = nn.Sequential(
+            nn.Linear(n_features, n_hidden),
+            nn.ReLU(),
+            nn.Linear(n_hidden, n_output)
+        )
 
     def forward(self, x):
         y_pred = self.linear(x)
-        y_pred = torch.sign(y_pred).squeeze(-1)
+        y_pred = y_pred.squeeze(-1)
         return y_pred
 
 
@@ -191,14 +202,14 @@ class AdaBoostClassifier(nn.Module):
         y_pred = torch.sign(y_pred)
         return y_pred
 
+# GPU加速
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 # 模型训练
 clf = AdaBoostClassifier()
-# GPU加速
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 clf.to(device)
 # 确定样本形状
-sample_features_example, sample_label_example = next(iter(train_dataloader))
+sample_features_example, sample_label_example = next(iter(weak_train_dataloader))
 if not clf.n_features:
     clf.n_features = sample_features_example.shape[1]
 # 创建adaboost分类器所有包含的弱分类器
@@ -209,50 +220,55 @@ for _ in range(clf.n_estimators):
     estimator.to(device)
     estimators.append(estimator)
 clf.estimators = nn.ModuleList(estimators)
+
 # 对弱分类器进行训练
 for i in range(clf.n_estimators):
     # 训练单个弱分类器
     estimator = clf.estimators[i]
     criterion = nn.BCELoss()
-    optimizer = torch.optim.SGD(estimator.parameters(), lr=0.01)
-    for step, (sample_features, sample_label) in enumerate(train_dataloader):
-        # GPU加速
-        sample_features = sample_features.to(device)
-        sample_label = sample_label.to(device)
-        optimizer.zero_grad()
-        predictions = estimator(sample_features)
-        sample_label = sample_label.float()
-        loss = criterion(torch.sigmoid(predictions), torch.sigmoid(sample_label))
-        loss.backward()
-        optimizer.step()
-        print('step:{}/{}'.format(step + 1, divided_line // train_batch_size))
-    # 完成单个弱分类器的训练
-    print("estimator[{}]/[{}] has finished training".format(i + 1, clf.n_estimators))
+    optimizer = torch.optim.Adam(estimator.parameters(), lr=0.05)
+    epochs = 10
+    for epoch in range(epochs):
+        for step, (sample_features, sample_label) in enumerate(weak_train_dataloader):
+            # GPU加速
+            sample_features = sample_features.to(device)
+            sample_label = sample_label.to(device)
+            optimizer.zero_grad()
+            predictions = estimator(sample_features)
+            sample_label = sample_label.float()
+            loss = criterion(torch.sigmoid(predictions), torch.sigmoid(sample_label))
+            loss.backward()
+            optimizer.step()
+            print('estimator[{}]/[{}], epoch:{}/{}, step:{}/{}'.format(i + 1, clf.n_estimators, epoch + 1, epochs, step + 1, divided_line_1 // weak_train_batch_size))
+    # 进行一次检验
+    sample_features_example, sample_label_example = next(iter(weak_train_dataloader))
+    # GPU加速
+    sample_features_example = sample_features.to(device)
+    sample_label_example = sample_label.to(device)
+    y_pred = torch.sign(estimator(sample_features_example))
+    # 计算指标
+    acc = (y_pred == sample_label_example).float().mean()
+    print('estimator[{}]/[{}], Accuracy:{}'.format(i + 1, clf.n_estimators, acc))
     clf.estimators[i] = estimator
 
 # 对adaboost中的alpha进行训练
-for step, (sample_features, sample_label) in enumerate(train_dataloader):
+for step, (sample_features, sample_label) in enumerate(ada_train_dataloader):
     # GPU加速
     sample_features = sample_features.to(device)
     sample_label = sample_label.to(device)
-    # 初始化学习率
-    clf.learning_rate = 0.5
     n_samples, _ = sample_features.shape
-    # 初始化样本权重
-    sample_weight = torch.full((n_samples,), (1 / n_samples))
     # GPU加速
-    sample_weight = sample_weight.to(device)
     for i in range(clf.n_estimators):
         # 更新样本权重
-        predictions = clf.estimators[i](sample_features)
-        sample_weight[sample_label == predictions] *= np.exp(-clf.learning_rate)
-        sample_weight /= sample_weight.sum()
+        predictions = torch.sign(clf.estimators[i](sample_features))
         # 计算alpha
-        err = (sample_weight * (sample_label != predictions)).sum()
+        err = (sample_label != predictions).float().mean()
+        if err == 0:
+            err = 0.001
         alpha = 0.5 * np.log((1 - err.cpu().numpy()) / err.cpu().numpy())
         clf.alphas.requires_grad_(False)
         clf.alphas[i] = alpha
-    print('step:{}/{}'.format(step + 1, divided_line // train_batch_size))
+    print('step:{}/{}'.format(step + 1, (divided_line_2 - divided_line_1) // ada_train_batch_size))
 
 # 训练好模型后保存模型
 state_dict = {
@@ -280,4 +296,4 @@ for step, (sample_features, sample_label) in enumerate(test_dataloader):
         y_pred = clf(sample_features)
         # 计算指标
         acc = (y_pred == sample_label).float().mean()
-        print('step:{}/{}, Accuracy:{}'.format(step + 1, (sample_num - divided_line) // test_batch_size, acc))
+        print('step:{}/{}, Accuracy:{}'.format(step + 1, (sample_num - divided_line_2) // test_batch_size, acc))
