@@ -202,6 +202,7 @@ class AdaBoostClassifier(nn.Module):
         y_pred = torch.sign(y_pred)
         return y_pred
 
+
 # GPU加速
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
